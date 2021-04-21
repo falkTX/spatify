@@ -1,14 +1,11 @@
 <script>
     function createPeerConnection(ws) {
-        var pc = new RTCPeerConnection({iceServers: []});
-        pc.onicecandidate = function(candidate) {
-            if (candidate.candidate != null) {
-                ws.send(JSON.stringify({candidate: candidate.candidate}));
-            }
-        }
-        
+        var pc = new RTCPeerConnection({iceServers: [] /*, sdpSemantics: 'unified-plan'*/ });
+
+        /*
         pc.addEventListener("connectionstatechange", event => {
         });
+        */
 
         pc.addEventListener("iceconnectionstatechange", event => {
             if (pc.iceConnectionState === "failed") {
@@ -16,7 +13,7 @@
             }
         });
 
-        pc.addEventListener('track', function (evt) { 
+        pc.addEventListener('track', function (evt) {
             document.getElementById('audio').srcObject = evt.streams[0];
             document.getElementById('audio').volume = 1;
             window.audio = audio;
@@ -31,46 +28,102 @@
             */
         })
 
+        /*
+        pc.onicecandidate = function(candidate) {
+            if (candidate.candidate != null) {
+                ws.send(JSON.stringify({candidate: candidate.candidate}));
+            }
+        }
+
         pc.onnegotiationneeded = async () => await negotiate(ws, pc);
+        */
 
         return pc;
     }
 
-    async function negotiate(ws, pc) {
-        offer = await pc.createOffer({offerToReceiveAudio: true});
-        await pc.setLocalDescription(offer);
-        offer = pc.localDescription;
-        ws.send(JSON.stringify({sdp: offer.sdp, type: offer.type}));
+    function negotiate(ws, pc) {
+        return pc.createOffer({ offerToReceiveAudio: true }).then(function(offer) {
+            return pc.setLocalDescription(offer);
+        }).then(function() {
+            // wait for ICE gathering to complete
+            return new Promise(function(resolve) {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    function checkState() {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }
+                    }
+                    pc.addEventListener('icegatheringstatechange', checkState);
+                }
+            });
+        }).then(function() {
+            var offer = pc.localDescription;
+            ws.send(JSON.stringify({sdp: offer.sdp, type: offer.type}));
+        })/*.catch(function(e) {
+            alert(e);
+        })*/;
     }
 
-    async function start() {
-        // Change this to your Spatify server IP
-        let ws = new WebSocket("wss://localhost:8765/");
+    function setup(ws) {
         let pc = createPeerConnection(ws);
-        ws.onmessage = function (message) {
-            var data = JSON.parse(message.data);
-            if (data.id) {
-                id = data.id;
-            }
-            if (data.type == 'answer') {
-                pc.setRemoteDescription(data)           
-            }
-        }
-
         let constraints = {
             audio: {
+                /*
+                "mandatory": {
+                    "googEchoCancellation": "false",
+                    "googAutoGainControl": "false",
+                    "googNoiseSuppression": "false",
+                    "googHighpassFilter": "false"
+                },
+                "optional": [],
+                */
+                channelCount: 2,
                 echoCancellation: false,
                 autoGainControl: false,
                 noiseSuppression: false,
-                volume: 1.0
-              },
-            video: false
+                volume: 1.0,
+            },
+            video: false,
         };
-        let stream = await navigator.mediaDevices.getUserMedia(constraints);
-        tracks = stream.getTracks();
-        tracks.forEach( (track) => pc.addTrack(track, stream) );
-        await negotiate(ws, pc);
+
+        /* TODO firefox support
+        if (!navigator.getUserMedia)
+            navigator.getUserMedia = navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+        */
+
+        navigator.mediaDevices.getUserMedia(constraints).then(function(stream) {
+            console.log(stream)
+            stream.getAudioTracks().forEach(function(track) {
+                console.log(track)
+                pc.addTrack(track, stream);
+            });
+            return negotiate(ws, pc);
+        }, function(err) {
+            console.error('Could not acquire media: ' + err);
+        });
+
+        return pc;
     }
+
+    function start() {
+        // Change this to your Spatify server IP
+        let ws = new WebSocket("wss://localhost:8765/");
+        let pc = null;
+
+        ws.onopen = function (m) {
+            pc = setup(ws);
+        }
+        ws.onmessage = function (message) {
+            var data = JSON.parse(message.data);
+            if (data.type == 'answer') {
+                pc.setRemoteDescription(data);
+            }
+        }
+    }
+
 </script>
 <div><button onclick="start();">start connection</button></div>
 <audio id="audio" controls></audio>

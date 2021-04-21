@@ -4,7 +4,10 @@ import ssl
 import websockets
 import logging
 
-from spatify.rtc import ws_handler
+try:
+    from spatify.rtc import ws_handler
+except:
+    from rtc import ws_handler
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,7 @@ def main():
         asyncio.get_event_loop().run_forever()
     except KeyboardInterrupt:
         logger.info("Quitting.")
-
+        #exit(0)
 
 if __name__ == "__main__":
     main()

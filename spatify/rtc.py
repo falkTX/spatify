@@ -2,7 +2,7 @@
 
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCRtpCapabilities
 from aiortc.rtcicetransport import candidate_from_aioice
-from aiortc.contrib.media import MediaPlayer, MediaBlackhole
+from aiortc.contrib.media import MediaPlayer, MediaRecorder
 from aiortc.contrib.signaling import object_to_string
 from aioice import Candidate
 
@@ -92,8 +92,19 @@ class RTCClient:
 
     async def handle_offer(self, message):
         offer = RTCSessionDescription(**message)
-        recorder = MediaBlackhole()
-        
+        # mkfifo /tmp/webrtc.fifo
+        # ffmpeg -f jack -i testing -f fifo -acodec pcm_s16le -muxdelay 0 -muxpreload 0 -map 0:a /tmp/webrtc.fifo.wav
+        recorder = MediaRecorder("/tmp/webrtc.fifo.wav", format='fifo')
+
+        # only send high quality audio
+        capabilities = []
+        for sender in self.peer_connection.getSenders():
+            capabilities = RTCRtpCapabilities(sender.getCapabilities('audio').codecs[:1])
+
+        for track in self.peer_connection.getTransceivers():
+            track.setCodecPreferences(capabilities.codecs)
+            track._codecs = track._codecs[:1]
+
         @self.peer_connection.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange():
             state = self.peer_connection.iceConnectionState
@@ -119,15 +130,6 @@ class RTCClient:
         await self.peer_connection.setRemoteDescription(offer)
         await recorder.start()
 
-        # only send high quality audio
-        capabilities = []
-        for sender in self.peer_connection.getSenders():
-            capabilities = RTCRtpCapabilities(sender.getCapabilities('audio').codecs[:1])
-
-        for track in self.peer_connection.getTransceivers():
-            track.setCodecPreferences(capabilities.codecs)
-            track._codecs = track._codecs[:1]
-        
         answer = await self.peer_connection.createAnswer()
         await self.peer_connection.setLocalDescription(answer)
         self.send(self.peer_connection.localDescription)
@@ -145,7 +147,7 @@ async def ws_handler(websocket, path):
         wsConnection.receiver())
     sender = asyncio.ensure_future(
         wsConnection.sender())
-   
+
     wsConnection.send(json.dumps({'id': identifier}))
 
     try:
@@ -153,7 +155,7 @@ async def ws_handler(websocket, path):
             [receiver, sender],
             return_when=asyncio.FIRST_COMPLETED,
         )
-        
+
         for task in pending:
             task.cancel()
         for task in done:
